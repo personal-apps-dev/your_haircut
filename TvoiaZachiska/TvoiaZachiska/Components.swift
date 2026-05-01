@@ -4,9 +4,9 @@ import SwiftUI
 
 struct TZPrimaryButton: View {
     let title: String
-    let action: () -> Void
     var icon: String? = nil
     var dark: Bool = false
+    let action: () -> Void
 
     var body: some View {
         Button(action: action) {
@@ -30,8 +30,8 @@ struct TZPrimaryButton: View {
 
 struct TZGhostButton: View {
     let title: String
-    let action: () -> Void
     var leadingIcon: String? = nil
+    let action: () -> Void
 
     var body: some View {
         Button(action: action) {
