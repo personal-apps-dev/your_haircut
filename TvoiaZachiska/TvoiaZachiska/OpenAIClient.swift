@@ -27,20 +27,18 @@ final class OpenAIClient {
 
     init(apiKey: String) { self.apiKey = apiKey }
 
-    /// Edits the user's photo, replacing only the hairstyle. Returns the edited image.
-    /// Uses `input_fidelity: high` and a face-locked alpha mask so the original face,
-    /// expression, and identity are preserved across the edit.
-    /// Costs roughly $0.08-0.10 (medium quality + high fidelity, 1024×1024) per call.
+    /// Edits the user's photo, replacing only the SHAPE of the hairstyle.
+    /// Output aspect ratio matches the input so BEFORE/AFTER align in the slider view.
+    /// Costs roughly $0.08-0.12 per call.
     func editHairstyle(image: UIImage, hairstyle: HairstyleItem) async throws -> UIImage {
-        let prepped = Self.squareCrop(image, side: 1024)
-        guard let png = prepped.pngData() else {
+        let normalized = Self.normalizeOrientation(image)
+        let resized = Self.resize(normalized, maxEdge: 1536)
+        guard let png = resized.pngData() else {
             throw OpenAIError.invalidImage
         }
 
-        // Detect the face on the cropped image so the mask aligns with what we send.
-        let maskData = await FaceMaskGenerator.generateFaceMaskPNG(for: prepped)
-
-        let prompt = Self.buildPrompt(for: hairstyle, hasMask: maskData != nil)
+        let outputSize = Self.outputSize(for: resized)
+        let prompt = Self.buildPrompt(for: hairstyle)
         let boundary = "----TZBoundary\(UUID().uuidString)"
 
         var request = URLRequest(url: endpoint)
@@ -49,19 +47,15 @@ final class OpenAIClient {
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 180
 
-        var parts: [(name: String, filename: String?, contentType: String?, data: Data)] = [
+        request.httpBody = Self.multipartBody(boundary: boundary, parts: [
             ("model",          nil,         nil,         "gpt-image-1".data(using: .utf8)!),
             ("prompt",         nil,         nil,         prompt.data(using: .utf8)!),
-            ("size",           nil,         nil,         "1024x1024".data(using: .utf8)!),
+            ("size",           nil,         nil,         outputSize.data(using: .utf8)!),
             ("n",              nil,         nil,         "1".data(using: .utf8)!),
             ("quality",        nil,         nil,         "medium".data(using: .utf8)!),
             ("input_fidelity", nil,         nil,         "high".data(using: .utf8)!),
             ("image",          "input.png", "image/png", png),
-        ]
-        if let maskData {
-            parts.append(("mask", "mask.png", "image/png", maskData))
-        }
-        request.httpBody = Self.multipartBody(boundary: boundary, parts: parts)
+        ])
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -86,35 +80,32 @@ final class OpenAIClient {
 
     // MARK: - Prompt construction
 
-    private static func buildPrompt(for hairstyle: HairstyleItem, hasMask: Bool) -> String {
+    private static func buildPrompt(for hairstyle: HairstyleItem) -> String {
         let styleDesc = englishDescription(for: hairstyle.shape)
         let lengthDesc = englishLength(for: hairstyle.length)
-        let colorDesc = englishColor(hex: hairstyle.hue)
-
-        if hasMask {
-            // The mask already locks the face — keep the prompt focused on the new hair
-            // and on blending it cleanly with what's preserved.
-            return """
-            Replace the hair on this person with: \(styleDesc), \(lengthDesc), \(colorDesc).
-
-            Photorealistic. Natural individual strands. Realistic hairline that sits naturally on the head.
-            Match the original photo's lighting direction, color temperature, and shadows.
-            Blend seamlessly with the preserved face — no visible seams along the forehead, temples, or jaw.
-            Do NOT alter facial features, skin, eyes, or expression. Keep clothing and background unchanged where possible.
-            """
-        }
 
         return """
-        Photorealistic photo edit. Change ONLY the hairstyle of the person in this photo to: \
-        \(styleDesc), \(lengthDesc), \(colorDesc).
+        Photorealistic photo edit. Change ONLY the SHAPE of this person's hair to: \
+        \(styleDesc), \(lengthDesc).
 
-        Critical preservation requirements:
+        HAIR COLOR — DO NOT CHANGE:
+        - Keep the person's existing natural hair color from the original photo EXACTLY as it is.
+        - Do NOT lighten, darken, or recolor the hair.
+        - The new haircut must be the same hair color as in the original.
+
+        IDENTITY — DO NOT CHANGE:
         - Keep the EXACT SAME face: same skin tone, eye color, eyebrows, nose, mouth, expression, jawline, ears, neck.
-        - Keep the EXACT SAME identity — the result must be recognizable as the same person.
-        - Keep the EXACT SAME lighting, background, clothing, and pose.
-        - The result must look like the SAME person photographed in the SAME setting, with only the hair changed.
-        - Hair must be photorealistic — natural strands, realistic shading, NOT illustrated, NOT cartoon, NOT painted.
-        - Hair should fit naturally on the head, with believable hairline and volume.
+        - The result must be 100% recognizable as the SAME person — not a different person.
+        - Keep the same head angle, head size, and head position within the frame.
+
+        SCENE — DO NOT CHANGE:
+        - Keep the EXACT SAME background, lighting, color temperature, shadows, clothing, and pose.
+        - Keep the SAME framing and composition (do not zoom in, do not crop, do not reposition the head).
+
+        Style:
+        - Photorealistic. Natural individual strands. Believable hairline.
+        - Looks like a real photograph of the same person, just with a different haircut shape.
+        - NOT cartoon, NOT illustrated, NOT painted, NOT stylized.
         """
     }
 
@@ -167,25 +158,6 @@ final class OpenAIClient {
         }
     }
 
-    private static func englishColor(hex: String) -> String {
-        let clean = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted).lowercased()
-        guard clean.count == 6,
-              let r = Int(clean.prefix(2), radix: 16),
-              let g = Int(clean.dropFirst(2).prefix(2), radix: 16),
-              let b = Int(clean.dropFirst(4).prefix(2), radix: 16) else {
-            return "natural hair color"
-        }
-        let lum = (r + g + b) / 3
-        switch lum {
-        case 0..<25:    return "jet black"
-        case 25..<55:   return "very dark brown, almost black"
-        case 55..<90:   return "rich dark brown"
-        case 90..<125:  return "warm medium brown"
-        case 125..<160: return "honey brown / caramel brown"
-        default:        return "light brown / dirty blonde"
-        }
-    }
-
     // MARK: - HTTP helpers
 
     private static func multipartBody(
@@ -216,27 +188,38 @@ final class OpenAIClient {
         return msg
     }
 
-    /// Center-crops + scales the image to a square at the given side length.
-    private static func squareCrop(_ image: UIImage, side: CGFloat) -> UIImage {
-        let size = image.size
-        let s = min(size.width, size.height)
-        let cropRect = CGRect(
-            x: (size.width - s) / 2,
-            y: (size.height - s) / 2,
-            width: s, height: s
-        )
+    // MARK: - Image helpers
 
-        // Use a renderer to get a CGImage in the right orientation
+    /// Maps the image's aspect ratio to one of gpt-image-1's supported output sizes.
+    private static func outputSize(for image: UIImage) -> String {
+        let aspect = image.size.width / max(image.size.height, 1)
+        if aspect < 0.85 { return "1024x1536" }     // portrait
+        if aspect > 1.15 { return "1536x1024" }     // landscape
+        return "1024x1024"                           // square-ish
+    }
+
+    /// Bakes the EXIF orientation into the pixel data so the upload isn't rotated.
+    private static func normalizeOrientation(_ image: UIImage) -> UIImage {
+        if image.imageOrientation == .up { return image }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        return UIGraphicsImageRenderer(size: image.size, format: format).image { _ in
+            image.draw(at: .zero)
+        }
+    }
+
+    /// Downscales so the longer edge ≤ maxEdge while preserving aspect.
+    private static func resize(_ image: UIImage, maxEdge: CGFloat) -> UIImage {
+        let w = image.size.width
+        let h = image.size.height
+        let longEdge = max(w, h)
+        if longEdge <= maxEdge { return image }
+        let scale = maxEdge / longEdge
+        let newSize = CGSize(width: floor(w * scale), height: floor(h * scale))
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
-        let cropped = UIGraphicsImageRenderer(size: CGSize(width: s, height: s), format: format).image { _ in
-            image.draw(at: CGPoint(x: -cropRect.origin.x, y: -cropRect.origin.y))
-        }
-
-        if s == side { return cropped }
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
-        return renderer.image { _ in
-            cropped.draw(in: CGRect(x: 0, y: 0, width: side, height: side))
+        return UIGraphicsImageRenderer(size: newSize, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
         }
     }
 }
