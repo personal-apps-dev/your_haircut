@@ -318,9 +318,20 @@ struct PreviewSplitView: View {
     @EnvironmentObject var appState: AppState
     @State private var splitFraction: CGFloat = 0.5
     @State private var isDragging = false
+    @State private var editTask: Task<Void, Never>? = nil
 
     private var style: HairstyleItem {
         appState.selectedStyle ?? (hairstyles(for: appState.gender ?? .woman).first!)
+    }
+
+    /// Cached edited image for the current photo + hairstyle, if any.
+    private var cachedEdit: UIImage? {
+        appState.editedImages[style.id]
+    }
+
+    /// Whether we should attempt the OpenAI image edit.
+    private var canEdit: Bool {
+        appState.capturedImage != nil && appState.hasOpenAIKey
     }
 
     var body: some View {
@@ -353,10 +364,33 @@ struct PreviewSplitView: View {
                 // Split viewer
                 GeometryReader { geo in
                     ZStack {
-                        // AFTER — applied hairstyle (still uses Canvas glyph since we
-                        // don't synthesize hair on the user's photo)
-                        FaceCanvasView(hairHex: style.hue)
+                        // AFTER — edited photo from OpenAI if available; otherwise
+                        // a stylized canvas glyph as a placeholder.
+                        Group {
+                            if let edited = cachedEdit {
+                                Image(uiImage: edited)
+                                    .resizable()
+                                    .scaledToFill()
+                            } else {
+                                FaceCanvasView(hairHex: style.hue)
+                            }
+                        }
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+
+                        // Loading overlay while the OpenAI edit is in flight
+                        if appState.isEditingImage && cachedEdit == nil {
+                            EditLoadingOverlay()
+                                .frame(width: geo.size.width, height: geo.size.height)
+                        }
+
+                        // Edit error banner (only on right half)
+                        if let err = appState.editingError, cachedEdit == nil, !appState.isEditingImage {
+                            EditErrorOverlay(message: err) {
+                                fireEdit(force: true)
+                            }
                             .frame(width: geo.size.width, height: geo.size.height)
+                        }
 
                         Text("ПІСЛЯ")
                             .font(.tzSans(11, weight: .semibold))
@@ -487,6 +521,109 @@ struct PreviewSplitView: View {
                 .padding(.top, 14)
                 .padding(.bottom, 32)
             }
+        }
+        .onAppear { fireEdit(force: false) }
+        .onChange(of: style.id) { _ in fireEdit(force: false) }
+        .onDisappear { editTask?.cancel() }
+    }
+
+    // MARK: - Image edit driver
+
+    private func fireEdit(force: Bool) {
+        guard canEdit,
+              let key = appState.openaiKey,
+              let img = appState.capturedImage else { return }
+
+        // Already cached — nothing to do unless caller forces a retry.
+        if !force, appState.editedImages[style.id] != nil { return }
+
+        editTask?.cancel()
+        appState.editingError = nil
+        appState.isEditingImage = true
+
+        let currentStyle = style
+        editTask = Task {
+            do {
+                let client = OpenAIClient(apiKey: key)
+                let result = try await client.editHairstyle(image: img, hairstyle: currentStyle)
+                await MainActor.run {
+                    if !Task.isCancelled {
+                        appState.editedImages[currentStyle.id] = result
+                        appState.isEditingImage = false
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    if !Task.isCancelled {
+                        appState.editingError = error.localizedDescription
+                        appState.isEditingImage = false
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Edit overlays
+
+private struct EditLoadingOverlay: View {
+    @State private var pulse = false
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.55)
+            VStack(spacing: 12) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+                    .scaleEffect(1.4)
+                Text("Приміряємо зачіску…")
+                    .font(.tzSans(13, weight: .medium))
+                    .foregroundColor(.white)
+                Text("AI генерує фото — це триває до 30 сек")
+                    .font(.tzSans(11))
+                    .foregroundColor(.white.opacity(0.7))
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 24)
+        }
+    }
+}
+
+private struct EditErrorOverlay: View {
+    let message: String
+    let onRetry: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.7)
+            VStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.tzWarn)
+                    .font(.system(size: 28))
+                Text("Не вдалося згенерувати фото")
+                    .font(.tzSans(14, weight: .semibold))
+                    .foregroundColor(.white)
+                Text(message)
+                    .font(.tzSans(12))
+                    .foregroundColor(.white.opacity(0.75))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .padding(.horizontal, 16)
+                Button {
+                    onRetry()
+                } label: {
+                    Text("Спробувати ще")
+                        .font(.tzSans(13, weight: .medium))
+                        .foregroundColor(.tzInk)
+                        .padding(.horizontal, 16)
+                        .frame(height: 36)
+                        .background(Color.white)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(PressButtonStyle())
+            }
+            .padding(.horizontal, 24)
         }
     }
 }

@@ -153,6 +153,7 @@ struct CaptureView: View {
                 if let data = try? await item.loadTransferable(type: Data.self),
                    let img = UIImage(data: data) {
                     appState.capturedImage = img
+                    appState.editedImages = [:]   // photo changed — drop cached edits
                 }
                 appState.photoTaken = true
                 proceedAfterCapture()
@@ -165,6 +166,7 @@ struct CaptureView: View {
                 withAnimation(.easeOut(duration: 0.15)) { flash = false }
             }
             appState.capturedImage = img
+            appState.editedImages = [:]   // photo changed — drop cached edits
             appState.photoTaken = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 proceedAfterCapture()

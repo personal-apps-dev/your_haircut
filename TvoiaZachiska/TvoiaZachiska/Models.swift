@@ -80,11 +80,18 @@ class AppState: ObservableObject {
 
     // Real photo + Claude API integration
     @Published var capturedImage: UIImage? = nil
-    @Published var apiKey: String? = KeychainHelper.shared.load()
+    @Published var apiKey: String? = KeychainHelper.shared.load(account: KeychainHelper.anthropicAccount)
     @Published var analysisResult: HairAnalysisResult? = nil
     @Published var apiError: String? = nil
 
+    // OpenAI image-edit integration
+    @Published var openaiKey: String? = KeychainHelper.shared.load(account: KeychainHelper.openaiAccount)
+    @Published var editedImages: [String: UIImage] = [:]    // hairstyle.id -> edited UIImage
+    @Published var isEditingImage: Bool = false
+    @Published var editingError: String? = nil
+
     var hasApiKey: Bool { !(apiKey ?? "").isEmpty }
+    var hasOpenAIKey: Bool { !(openaiKey ?? "").isEmpty }
 
     func navigate(to screen: AppScreen) {
         navDirection = .forward

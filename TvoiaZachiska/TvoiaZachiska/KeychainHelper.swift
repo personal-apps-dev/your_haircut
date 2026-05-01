@@ -1,16 +1,18 @@
 import Foundation
 import Security
 
-/// Stores the Anthropic API key in the iOS Keychain (per-device, encrypted at rest).
+/// Stores secrets in the iOS Keychain, keyed by account name (per-device, encrypted).
 final class KeychainHelper {
     static let shared = KeychainHelper()
 
+    static let anthropicAccount = "anthropic_api_key"
+    static let openaiAccount    = "openai_api_key"
+
     private let service = "com.tvoiazachiska.app"
-    private let account = "anthropic_api_key"
 
     private init() {}
 
-    func save(_ value: String) {
+    func save(_ value: String, account: String) {
         guard let data = value.data(using: .utf8) else { return }
 
         let baseQuery: [String: Any] = [
@@ -26,7 +28,7 @@ final class KeychainHelper {
         SecItemAdd(addQuery as CFDictionary, nil)
     }
 
-    func load() -> String? {
+    func load(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String:        kSecClassGenericPassword,
             kSecAttrService as String:  service,
@@ -42,7 +44,7 @@ final class KeychainHelper {
         return str
     }
 
-    func delete() {
+    func delete(account: String) {
         let query: [String: Any] = [
             kSecClass as String:       kSecClassGenericPassword,
             kSecAttrService as String: service,
