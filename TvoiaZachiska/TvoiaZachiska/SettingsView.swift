@@ -99,7 +99,7 @@ struct SettingsView: View {
                         Text("""
                         Орієнтовна вартість одного циклу (аналіз + заміна зачіски):
                         • Claude Opus 4.7 — ≈ $0.02-0.05
-                        • OpenAI gpt-image-1 (medium) — ≈ $0.07
+                        • OpenAI gpt-image-1 (high quality) — ≈ $0.19-0.25
                         Ключі можна видалити будь-коли.
                         """)
                             .font(.tzSans(12))

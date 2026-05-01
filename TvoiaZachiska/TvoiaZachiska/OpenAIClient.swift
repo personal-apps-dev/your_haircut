@@ -29,7 +29,8 @@ final class OpenAIClient {
 
     /// Edits the user's photo, replacing only the SHAPE of the hairstyle.
     /// Output aspect ratio matches the input so BEFORE/AFTER align in the slider view.
-    /// Costs roughly $0.08-0.12 per call.
+    /// Uses `quality: high` + `input_fidelity: high` for maximum realism.
+    /// Costs roughly $0.19-0.25 per call.
     func editHairstyle(image: UIImage, hairstyle: HairstyleItem) async throws -> UIImage {
         let normalized = Self.normalizeOrientation(image)
         let resized = Self.resize(normalized, maxEdge: 1536)
@@ -45,14 +46,14 @@ final class OpenAIClient {
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 180
+        request.timeoutInterval = 240
 
         request.httpBody = Self.multipartBody(boundary: boundary, parts: [
             ("model",          nil,         nil,         "gpt-image-1".data(using: .utf8)!),
             ("prompt",         nil,         nil,         prompt.data(using: .utf8)!),
             ("size",           nil,         nil,         outputSize.data(using: .utf8)!),
             ("n",              nil,         nil,         "1".data(using: .utf8)!),
-            ("quality",        nil,         nil,         "medium".data(using: .utf8)!),
+            ("quality",        nil,         nil,         "high".data(using: .utf8)!),
             ("input_fidelity", nil,         nil,         "high".data(using: .utf8)!),
             ("image",          "input.png", "image/png", png),
         ])
