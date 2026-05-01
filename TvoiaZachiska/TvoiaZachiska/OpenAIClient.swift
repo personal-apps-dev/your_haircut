@@ -28,14 +28,19 @@ final class OpenAIClient {
     init(apiKey: String) { self.apiKey = apiKey }
 
     /// Edits the user's photo, replacing only the hairstyle. Returns the edited image.
-    /// Costs roughly $0.04 (medium quality, 1024×1024) per call on `gpt-image-1`.
+    /// Uses `input_fidelity: high` and a face-locked alpha mask so the original face,
+    /// expression, and identity are preserved across the edit.
+    /// Costs roughly $0.08-0.10 (medium quality + high fidelity, 1024×1024) per call.
     func editHairstyle(image: UIImage, hairstyle: HairstyleItem) async throws -> UIImage {
         let prepped = Self.squareCrop(image, side: 1024)
         guard let png = prepped.pngData() else {
             throw OpenAIError.invalidImage
         }
 
-        let prompt = Self.buildPrompt(for: hairstyle)
+        // Detect the face on the cropped image so the mask aligns with what we send.
+        let maskData = await FaceMaskGenerator.generateFaceMaskPNG(for: prepped)
+
+        let prompt = Self.buildPrompt(for: hairstyle, hasMask: maskData != nil)
         let boundary = "----TZBoundary\(UUID().uuidString)"
 
         var request = URLRequest(url: endpoint)
@@ -44,14 +49,19 @@ final class OpenAIClient {
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 180
 
-        request.httpBody = Self.multipartBody(boundary: boundary, parts: [
-            ("model",   nil,         nil,         "gpt-image-1".data(using: .utf8)!),
-            ("prompt",  nil,         nil,         prompt.data(using: .utf8)!),
-            ("size",    nil,         nil,         "1024x1024".data(using: .utf8)!),
-            ("n",       nil,         nil,         "1".data(using: .utf8)!),
-            ("quality", nil,         nil,         "medium".data(using: .utf8)!),
-            ("image",   "input.png", "image/png", png),
-        ])
+        var parts: [(name: String, filename: String?, contentType: String?, data: Data)] = [
+            ("model",          nil,         nil,         "gpt-image-1".data(using: .utf8)!),
+            ("prompt",         nil,         nil,         prompt.data(using: .utf8)!),
+            ("size",           nil,         nil,         "1024x1024".data(using: .utf8)!),
+            ("n",              nil,         nil,         "1".data(using: .utf8)!),
+            ("quality",        nil,         nil,         "medium".data(using: .utf8)!),
+            ("input_fidelity", nil,         nil,         "high".data(using: .utf8)!),
+            ("image",          "input.png", "image/png", png),
+        ]
+        if let maskData {
+            parts.append(("mask", "mask.png", "image/png", maskData))
+        }
+        request.httpBody = Self.multipartBody(boundary: boundary, parts: parts)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -76,10 +86,23 @@ final class OpenAIClient {
 
     // MARK: - Prompt construction
 
-    private static func buildPrompt(for hairstyle: HairstyleItem) -> String {
+    private static func buildPrompt(for hairstyle: HairstyleItem, hasMask: Bool) -> String {
         let styleDesc = englishDescription(for: hairstyle.shape)
         let lengthDesc = englishLength(for: hairstyle.length)
         let colorDesc = englishColor(hex: hairstyle.hue)
+
+        if hasMask {
+            // The mask already locks the face — keep the prompt focused on the new hair
+            // and on blending it cleanly with what's preserved.
+            return """
+            Replace the hair on this person with: \(styleDesc), \(lengthDesc), \(colorDesc).
+
+            Photorealistic. Natural individual strands. Realistic hairline that sits naturally on the head.
+            Match the original photo's lighting direction, color temperature, and shadows.
+            Blend seamlessly with the preserved face — no visible seams along the forehead, temples, or jaw.
+            Do NOT alter facial features, skin, eyes, or expression. Keep clothing and background unchanged where possible.
+            """
+        }
 
         return """
         Photorealistic photo edit. Change ONLY the hairstyle of the person in this photo to: \
@@ -87,6 +110,7 @@ final class OpenAIClient {
 
         Critical preservation requirements:
         - Keep the EXACT SAME face: same skin tone, eye color, eyebrows, nose, mouth, expression, jawline, ears, neck.
+        - Keep the EXACT SAME identity — the result must be recognizable as the same person.
         - Keep the EXACT SAME lighting, background, clothing, and pose.
         - The result must look like the SAME person photographed in the SAME setting, with only the hair changed.
         - Hair must be photorealistic — natural strands, realistic shading, NOT illustrated, NOT cartoon, NOT painted.
