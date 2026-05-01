@@ -187,10 +187,13 @@ struct ProfileView: View {
                                 .foregroundColor(.tzMuted)
                         }
                         Spacer()
-                        Circle()
-                            .fill(Color.tzSurfaceMuted)
-                            .frame(width: 40, height: 40)
-                            .overlay(TZIcon("gearshape", size: 17))
+                        Button { appState.navigate(to: .settings) } label: {
+                            Circle()
+                                .fill(Color.tzSurfaceMuted)
+                                .frame(width: 40, height: 40)
+                                .overlay(TZIcon("gearshape", size: 17))
+                        }
+                        .buttonStyle(PlainButtonStyle())
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, 60)
@@ -262,6 +265,26 @@ struct ProfileView: View {
                     // Menu
                     VStack(alignment: .leading, spacing: 10) {
                         VStack(spacing: 0) {
+                            // API key row — always first, navigates to Settings
+                            Button { appState.navigate(to: .settings) } label: {
+                                HStack(spacing: 14) {
+                                    TZIcon("key", size: 18, color: .tzMuted)
+                                    Text("API ключ Claude")
+                                        .font(.tzSans(14))
+                                        .foregroundColor(.tzInk)
+                                        .kerning(-0.1)
+                                    Spacer()
+                                    Text(appState.hasApiKey ? "Активний" : "Не встановлено")
+                                        .font(.tzSans(12))
+                                        .foregroundColor(appState.hasApiKey ? .tzPos : .tzMuted)
+                                    TZIcon("chevron.right", size: 13, color: .tzMutedSoft)
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 14)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            Divider().padding(.leading, 16)
+
                             ForEach(Array(menuItems.enumerated()), id: \.element.0) { idx, item in
                                 Button {
                                     // placeholder

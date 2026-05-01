@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import UIKit
 
 // MARK: - Enums
 
@@ -7,7 +8,7 @@ enum AppScreen: String, Hashable, CaseIterable {
     case splash, onboard, permission, home
     case capture, gender, hairquiz, gallery
     case preview, analyzing, result
-    case saved, profile
+    case saved, profile, settings
 }
 
 enum HairGender: String, Hashable {
@@ -76,6 +77,14 @@ class AppState: ObservableObject {
     @Published var hairProfile = HairProfile()
     @Published var galleryLayout: GalleryLayout = .grid
     @Published var analysisStyle: AnalysisStyle = .detailed
+
+    // Real photo + Claude API integration
+    @Published var capturedImage: UIImage? = nil
+    @Published var apiKey: String? = KeychainHelper.shared.load()
+    @Published var analysisResult: HairAnalysisResult? = nil
+    @Published var apiError: String? = nil
+
+    var hasApiKey: Bool { !(apiKey ?? "").isEmpty }
 
     func navigate(to screen: AppScreen) {
         navDirection = .forward

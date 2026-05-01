@@ -6,6 +6,7 @@ struct AnalyzingView: View {
     @EnvironmentObject var appState: AppState
     @State private var stage = 0
     @State private var scanOffset: CGFloat = -60
+    @State private var apiTask: Task<Void, Never>? = nil
 
     private let stages = [
         "Аналіз обличчя",
@@ -106,26 +107,50 @@ struct AnalyzingView: View {
             }
         }
         .onAppear { startAnalysis() }
+        .onDisappear { apiTask?.cancel() }
     }
 
     private func startAnalysis() {
         withAnimation(Animation.linear(duration: 2).repeatForever(autoreverses: false)) {
             scanOffset = 280
         }
-        advanceStage()
+
+        // Reset previous result
+        appState.analysisResult = nil
+        appState.apiError = nil
+
+        // Run animation + (optional) API call concurrently. Navigate when both are done.
+        apiTask = Task {
+            async let animationDone: () = runStageAnimation()
+
+            if let key = appState.apiKey, !key.isEmpty,
+               let img = appState.capturedImage,
+               let style = appState.selectedStyle {
+                do {
+                    let client = AnthropicClient(apiKey: key)
+                    let result = try await client.analyzeHairstyle(image: img, hairstyle: style)
+                    await MainActor.run { appState.analysisResult = result }
+                } catch {
+                    await MainActor.run {
+                        appState.apiError = error.localizedDescription
+                    }
+                }
+            }
+
+            _ = await animationDone
+            await MainActor.run {
+                if !Task.isCancelled { appState.navigate(to: .result) }
+            }
+        }
     }
 
-    private func advanceStage() {
-        guard stage < stages.count - 1 else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                appState.navigate(to: .result)
-            }
-            return
+    @MainActor
+    private func runStageAnimation() async {
+        for i in 1..<stages.count {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            withAnimation { stage = i }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
-            withAnimation { stage += 1 }
-            advanceStage()
-        }
+        try? await Task.sleep(nanoseconds: 800_000_000)
     }
 }
 
@@ -180,25 +205,41 @@ struct ResultView: View {
         appState.selectedStyle ?? (hairstyles(for: appState.gender ?? .woman).first!)
     }
 
-    private let breakdown: [(label: String, value: Int, note: String)] = [
+    private static let mockBreakdown: [(label: String, value: Int, note: String)] = [
         ("Форма обличчя", 92, "Овальна — підходить майже все"),
         ("Тип волосся",   85, "Середня густина, легка хвиля"),
         ("Стиль",         88, "Узгоджується з твоїм гардеробом"),
         ("Догляд",        78, "~15 хв ранкового стайлінгу"),
     ]
 
-    private let tips = [
+    private static let mockTips = [
         "Текстуруючий спрей надасть бажаний обʼєм біля коренів.",
         "Запитай майстра про точкове філіювання — підкреслить шари.",
         "Використовуй термозахист перед укладкою феном.",
     ]
+
+    private var breakdown: [(label: String, value: Int, note: String)] {
+        if let real = appState.analysisResult {
+            return real.breakdown.map { ($0.label, $0.value, $0.note) }
+        }
+        return Self.mockBreakdown
+    }
+
+    private var tips: [String] {
+        appState.analysisResult?.tips ?? Self.mockTips
+    }
+
+    private var displayedMatch: Int {
+        appState.analysisResult?.matchScore ?? style.match
+    }
 
     private var alts: [HairstyleItem] {
         hairstyles(for: appState.gender ?? .woman).filter { $0.id != style.id }.prefix(3).map { $0 }
     }
 
     private var matchLabel: String {
-        style.match >= 85 ? "дуже личить" : style.match >= 75 ? "добре пасує" : "пасує помірно"
+        if let real = appState.analysisResult { return real.matchLabel }
+        return displayedMatch >= 85 ? "дуже личить" : displayedMatch >= 75 ? "добре пасує" : "пасує помірно"
     }
 
     var body: some View {
@@ -244,7 +285,7 @@ struct ResultView: View {
 
                     // Title
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("AI-аналіз · повний звіт")
+                        Text(appState.analysisResult != nil ? "AI-аналіз · повний звіт" : "Демо-аналіз · додай API ключ")
                             .font(.tzSans(11, weight: .medium))
                             .kerning(1.5)
                             .textCase(.uppercase)
@@ -260,13 +301,47 @@ struct ResultView: View {
                     .padding(.horizontal, 24)
                     .padding(.top, 24)
 
+                    // API error banner
+                    if let err = appState.apiError {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.tzWarn)
+                                .font(.system(size: 14))
+                                .padding(.top, 1)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("AI-аналіз не вдалося виконати")
+                                    .font(.tzSans(13, weight: .semibold))
+                                    .foregroundColor(.tzInk)
+                                Text(err)
+                                    .font(.tzSans(12))
+                                    .foregroundColor(.tzMuted)
+                                    .lineLimit(3)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(12)
+                        .background(Color.tzWarn.opacity(0.08))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.tzWarn.opacity(0.3)))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .padding(.horizontal, 24)
+                        .padding(.top, 16)
+                    }
+
                     // Portrait + score ring
                     HStack(alignment: .center, spacing: 16) {
-                        FaceCanvasView(hairHex: style.hue)
-                            .frame(width: 130, height: 160)
-                            .clipShape(RoundedRectangle(cornerRadius: 20))
+                        Group {
+                            if let img = appState.capturedImage {
+                                Image(uiImage: img)
+                                    .resizable()
+                                    .scaledToFill()
+                            } else {
+                                FaceCanvasView(hairHex: style.hue)
+                            }
+                        }
+                        .frame(width: 130, height: 160)
+                        .clipShape(RoundedRectangle(cornerRadius: 20))
 
-                        ScoreRingView(value: displayedScore, max: style.match)
+                        ScoreRingView(value: displayedScore, max: displayedMatch)
                             .frame(maxWidth: .infinity)
                     }
                     .padding(.horizontal, 24)
@@ -401,7 +476,7 @@ struct ResultView: View {
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 withAnimation(.easeOut(duration: 1.4)) {
-                    displayedScore = Double(style.match)
+                    displayedScore = Double(displayedMatch)
                 }
             }
         }

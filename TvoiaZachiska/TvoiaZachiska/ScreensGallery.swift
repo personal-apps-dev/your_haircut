@@ -353,7 +353,8 @@ struct PreviewSplitView: View {
                 // Split viewer
                 GeometryReader { geo in
                     ZStack {
-                        // AFTER — full
+                        // AFTER — applied hairstyle (still uses Canvas glyph since we
+                        // don't synthesize hair on the user's photo)
                         FaceCanvasView(hairHex: style.hue)
                             .frame(width: geo.size.width, height: geo.size.height)
 
@@ -366,17 +367,26 @@ struct PreviewSplitView: View {
                             .clipShape(Capsule())
                             .position(x: geo.size.width - 50, y: 24)
 
-                        // BEFORE — clipped to left side
-                        FaceCanvasView(hairHex: "3D2B1F")
-                            .frame(width: geo.size.width, height: geo.size.height)
-                            .mask(
-                                HStack(spacing: 0) {
-                                    Rectangle()
-                                        .frame(width: geo.size.width * splitFraction)
-                                    Spacer()
-                                }
-                                .frame(width: geo.size.width)
-                            )
+                        // BEFORE — real photo if user captured one, else fallback
+                        Group {
+                            if let img = appState.capturedImage {
+                                Image(uiImage: img)
+                                    .resizable()
+                                    .scaledToFill()
+                            } else {
+                                FaceCanvasView(hairHex: "3D2B1F")
+                            }
+                        }
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                        .mask(
+                            HStack(spacing: 0) {
+                                Rectangle()
+                                    .frame(width: geo.size.width * splitFraction)
+                                Spacer()
+                            }
+                            .frame(width: geo.size.width)
+                        )
 
                         Text("ДО")
                             .font(.tzSans(11, weight: .semibold))

@@ -48,6 +48,7 @@ struct ContentView: View {
         case .result:     ResultView()
         case .saved:      SavedView()
         case .profile:    ProfileView()
+        case .settings:   SettingsView()
         }
     }
 }

@@ -7,8 +7,9 @@ struct CaptureView: View {
     @EnvironmentObject var appState: AppState
     @State private var shooting = false
     @State private var flash = false
-    @State private var showPicker = false
     @State private var selectedItem: PhotosPickerItem? = nil
+    @State private var showCamera = false
+    @State private var cameraImage: UIImage? = nil
 
     var body: some View {
         ZStack {
@@ -106,8 +107,8 @@ struct CaptureView: View {
 
                     Spacer()
 
-                    // Shutter button
-                    Button { takePhoto() } label: {
+                    // Shutter button — opens real camera if available, else gallery
+                    Button { openCameraOrFallback() } label: {
                         ZStack {
                             Circle().stroke(Color.white, lineWidth: 3)
                             Circle().fill(Color.white)
@@ -121,11 +122,14 @@ struct CaptureView: View {
 
                     Spacer()
 
-                    // Flip camera
-                    Circle()
-                        .fill(Color.white.opacity(0.18))
-                        .frame(width: 50, height: 50)
-                        .overlay(TZIcon("arrow.triangle.2.circlepath.camera", size: 20, color: .white))
+                    // Skip / mock — proceed without a real photo
+                    Button { skipPhoto() } label: {
+                        Circle()
+                            .fill(Color.white.opacity(0.18))
+                            .frame(width: 50, height: 50)
+                            .overlay(TZIcon("arrow.right", size: 20, color: .white))
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
                 .padding(.horizontal, 32)
                 .padding(.bottom, 50)
@@ -137,17 +141,47 @@ struct CaptureView: View {
                     .transition(.opacity)
             }
         }
-        .onChange(of: selectedItem) { _ in
+        .sheet(isPresented: $showCamera) {
+            ImagePicker(sourceType: .camera, image: $cameraImage) {
+                showCamera = false
+            }
+            .ignoresSafeArea()
+        }
+        .onChange(of: selectedItem) { newItem in
+            guard let item = newItem else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let img = UIImage(data: data) {
+                    appState.capturedImage = img
+                }
+                appState.photoTaken = true
+                proceedAfterCapture()
+            }
+        }
+        .onChange(of: cameraImage) { newImg in
+            guard let img = newImg else { return }
+            withAnimation(.easeIn(duration: 0.05)) { flash = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                withAnimation(.easeOut(duration: 0.15)) { flash = false }
+            }
+            appState.capturedImage = img
             appState.photoTaken = true
-            if appState.gender == nil {
-                appState.navigate(to: .gender)
-            } else {
-                appState.navigate(to: .gallery)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                proceedAfterCapture()
             }
         }
     }
 
-    private func takePhoto() {
+    private func openCameraOrFallback() {
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            showCamera = true
+        } else {
+            // No camera (e.g. simulator) — simulate with mock and proceed
+            skipPhoto()
+        }
+    }
+
+    private func skipPhoto() {
         withAnimation(.easeIn(duration: 0.05)) { flash = true }
         shooting = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
@@ -155,11 +189,15 @@ struct CaptureView: View {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
             appState.photoTaken = true
-            if appState.gender == nil {
-                appState.navigate(to: .gender)
-            } else {
-                appState.navigate(to: .gallery)
-            }
+            proceedAfterCapture()
+        }
+    }
+
+    private func proceedAfterCapture() {
+        if appState.gender == nil {
+            appState.navigate(to: .gender)
+        } else {
+            appState.navigate(to: .gallery)
         }
     }
 
