@@ -83,6 +83,18 @@ final class OpenAIClient {
     private static func buildPrompt(for hairstyle: HairstyleItem) -> String {
         let styleDesc = englishDescription(for: hairstyle.shape)
         let lengthDesc = englishLength(for: hairstyle.length)
+        let isLowVolume = isLowVolumeStyle(hairstyle.shape)
+
+        let lowVolumeSection = isLowVolume ? """
+
+
+        CRITICAL — HEAD/SKULL SIZE (this style has LESS volume than the original hair):
+        - The new hair has much less volume than the person's current hair. The visible head outline MUST shrink accordingly.
+        - The skull must follow real human anatomy — a natural rounded crown sitting close to the scalp, NOT a balloon shape that fills the original hair silhouette.
+        - DO NOT keep the original hair silhouette and just paint it as skin or short hair. That makes the head look unnaturally inflated and oversized.
+        - The crown of the head should sit lower and narrower than the original hair did — closer to the actual skull.
+        - Picture the same person AFTER a real haircut: their head silhouette becomes smaller because the hair volume is gone, not because the skull shrank.
+        """ : ""
 
         return """
         Photorealistic photo edit. Change ONLY the SHAPE of this person's hair to: \
@@ -96,7 +108,12 @@ final class OpenAIClient {
         IDENTITY — DO NOT CHANGE:
         - Keep the EXACT SAME face: same skin tone, eye color, eyebrows, nose, mouth, expression, jawline, ears, neck.
         - The result must be 100% recognizable as the SAME person — not a different person.
-        - Keep the same head angle, head size, and head position within the frame.
+        - Keep the same head angle and head position within the frame.
+
+        HEAD ANATOMY — be physically accurate:
+        - The skull (bone structure) follows real human anatomy. The crown of the head must follow a natural skull curve.
+        - Do NOT inflate the head to match the original hair silhouette.
+        - The head's outer outline = skull shape + new hair volume. If the new hair has less volume, the outline shrinks. If more, it grows.\(lowVolumeSection)
 
         SCENE — DO NOT CHANGE:
         - Keep the EXACT SAME background, lighting, color temperature, shadows, clothing, and pose.
@@ -107,6 +124,18 @@ final class OpenAIClient {
         - Looks like a real photograph of the same person, just with a different haircut shape.
         - NOT cartoon, NOT illustrated, NOT painted, NOT stylized.
         """
+    }
+
+    /// Styles whose silhouette is significantly smaller than typical hair —
+    /// the model needs an explicit reminder not to keep the original hair outline.
+    private static func isLowVolumeStyle(_ shape: HairShape) -> Bool {
+        switch shape {
+        case .bald, .buzzZero, .buzz, .crew, .crop, .ivy, .caesar,
+             .pixie, .pixieFringe, .bixie, .slick:
+            return true
+        default:
+            return false
+        }
     }
 
     private static func englishDescription(for shape: HairShape) -> String {
